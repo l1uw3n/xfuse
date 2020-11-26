@@ -1,4 +1,5 @@
 import itertools as it
+import warnings
 from copy import deepcopy
 from functools import partial
 from typing import Dict, List, NamedTuple, Optional
@@ -75,10 +76,55 @@ class ST(Image):
         self.__init_rate = None
         self.__init_logits = None
 
+        self.__allocated_genes = None
+        self.__active_genes_id = None
+        self.__gene_indices = None
+
     @property
     def metagenes(self) -> Dict[str, MetageneDefault]:
         r"""Metagene initialization templates"""
         return deepcopy(self.__metagenes)
+
+    @property
+    def allocated_genes(self) -> List[str]:
+        if self.__allocated_genes is None:
+            self.__allocated_genes = require("genes")
+        return self.__allocated_genes
+
+    @property
+    def gene_indices(self) -> torch.Tensor:
+        active_genes = require("genes")
+
+        if (
+            self.__gene_indices is None
+            or id(active_genes) != self.__active_genes_id
+        ):
+            self.__active_genes_id = id(active_genes)
+
+            log(DEBUG, "Computing new gene indices")
+
+            nonexistant_mask = np.isin(
+                active_genes, self.allocated_genes, invert=True
+            )
+            if nonexistant_mask.any():
+                warnings.warn(
+                    (
+                        "Genes {} have not been allocated."
+                        " Delayed allocation is currently not supported."
+                    ).format(", ".join(active_genes[nonexistant_mask]))
+                )
+                active_genes = active_genes[nonexistant_mask]
+
+            active_genes_idx = np.searchsorted(
+                self.allocated_genes,
+                active_genes,
+                sorter=np.argsort(self.allocated_genes),
+            )
+            self.__gene_indices = torch.as_tensor(
+                active_genes_idx, dtype=torch.long
+            )
+
+        return self.__gene_indices
 
     def add_metagene(self, metagene: Optional[MetageneDefault] = None):
         r"""
@@ -182,10 +228,10 @@ class ST(Image):
 
         scale = torch.zeros(1, requires_grad=True, device=device)
         rate = torch.zeros(
-            len(dataloader.dataset.genes), requires_grad=True, device=device
+            len(self.allocated_genes), requires_grad=True, device=device
         )
         logits = torch.zeros(
-            len(dataloader.dataset.genes), requires_grad=True, device=device
+            len(self.allocated_genes), requires_grad=True, device=device
         )
 
         optim = torch.optim.Adam((scale, rate, logits), lr=0.01)
@@ -198,7 +244,8 @@ class ST(Image):
                     torch.cat(x["ST"]["data"]).to(device) for x in dataloader
                 ):
                     distr = NegativeBinomial(
-                        r2rp(scale) * r2rp(rate), logits=logits
+                        r2rp(scale) * r2rp(rate[self.gene_indices]),
+                        logits=logits[self.gene_indices],
                     )
                     rmse = (
                         ((distr.mean - x) ** 2)
@@ -298,7 +345,6 @@ class ST(Image):
             rim = torch.nn.functional.softmax(rim, dim=1)
             return rim
 
-        num_genes = x["data"][0].shape[1]
         decoded = self._decode(zs)
         label = center_crop(x["label"], [None, *decoded.shape[-2:]])
 
@@ -323,7 +369,7 @@ class ST(Image):
                 1e-8
                 + get_param(
                     "rate_mg_prior_sd",
-                    lambda: torch.ones(num_genes),
+                    lambda: torch.ones(len(self.allocated_genes)),
                     constraint=constraints.positive,
                 ),
             )
@@ -351,7 +397,7 @@ class ST(Image):
                 1e-8
                 + get_param(
                     "rate_g_effects_prior_sd",
-                    lambda: torch.ones(num_genes),
+                    lambda: torch.ones(len(self.allocated_genes)),
                     constraint=constraints.positive,
                 ),
             )
@@ -359,12 +405,13 @@ class ST(Image):
             rate_g_effects = torch.cat(
                 [rate_g_effects_baseline.unsqueeze(0), rate_g_effects]
             )
+            rate_g_effects = rate_g_effects[:, self.gene_indices]
             logits_g_effects_prior = Normal(
                 0.0,
                 1e-8
                 + get_param(
                     "logits_g_effects_prior_sd",
-                    lambda: torch.ones(num_genes),
+                    lambda: torch.ones(len(self.allocated_genes)),
                     constraint=constraints.positive,
                 ),
             )
@@ -374,6 +421,7 @@ class ST(Image):
             logits_g_effects = torch.cat(
                 [logits_g_effects_baseline.unsqueeze(0), logits_g_effects]
             )
+            logits_g_effects = logits_g_effects[:, self.gene_indices]
 
         effects = []
         for covariate, vals in require("covariates"):
@@ -413,7 +461,7 @@ class ST(Image):
                 if not mask.any():
                     return (
                         data[[]],
-                        torch.zeros(0, num_genes).to(rim),
+                        torch.zeros(0, self.gene_indices.shape[0]).to(rim),
                         logits_g.expand(0, -1),
                     )
 
@@ -446,7 +494,6 @@ class ST(Image):
     def _sample_globals(self):
         dataset = require("dataloader").dataset
         device = get("default_device")
-        num_genes = len(dataset.genes)
 
         p.sample(
             "rate_g_effects",
@@ -454,7 +501,9 @@ class ST(Image):
                 get_param(
                     "rate_g_effects_mu",
                     lambda: torch.zeros(
-                        dataset.data.design.shape[0], num_genes, device=device
+                        dataset.data.design.shape[0],
+                        len(self.allocated_genes),
+                        device=device,
                     ),
                 ),
                 1e-8
@@ -462,7 +511,9 @@ class ST(Image):
                     "rate_g_effects_sd",
                     lambda: 1e-2
                     * torch.ones(
-                        dataset.data.design.shape[0], num_genes, device=device
+                        dataset.data.design.shape[0],
+                        len(self.allocated_genes),
+                        device=device,
                     ),
                     constraint=constraints.positive,
                 ),
@@ -476,7 +527,9 @@ class ST(Image):
                 get_param(
                     "logits_g_effects_mu",
                     lambda: torch.zeros(
-                        dataset.data.design.shape[0], num_genes, device=device
+                        dataset.data.design.shape[0],
+                        len(self.allocated_genes),
+                        device=device,
                     ),
                 ),
                 1e-8
@@ -484,7 +537,9 @@ class ST(Image):
                     "logits_g_effects_sd",
                     lambda: 1e-2
                     * torch.ones(
-                        dataset.data.design.shape[0], num_genes, device=device
+                        dataset.data.design.shape[0],
+                        len(self.allocated_genes),
+                        device=device,
                     ),
                     constraint=constraints.positive,
                 ),
@@ -510,6 +565,8 @@ class ST(Image):
             if len(self.__metagenes) < 2:
                 mu = mu.detach()
                 sd = sd.detach()
+            mu = mu[self.gene_indices]
+            sd = sd[self.gene_indices]
             p.sample(
                 _encode_metagene_name(name),
                 Normal(mu, 1e-8 + sd),
@@ -519,7 +576,7 @@ class ST(Image):
         for name, metagene in self.metagenes.items():
             if metagene.profile is None:
                 metagene = MetageneDefault(
-                    metagene.scale, torch.zeros(num_genes)
+                    metagene.scale, torch.zeros(len(self.allocated_genes))
                 )
             _sample_metagene(metagene, name)
 
