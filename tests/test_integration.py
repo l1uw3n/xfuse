@@ -33,6 +33,7 @@ def test_toydata(mocker, toydata):
         model=xfuse,
         optimizer=pyro.optim.Adam({"lr": 0.0001}),
         dataloader=toydata,
+        genes=toydata.dataset.genes,
         covariates=extract_covariates(toydata.dataset.data.design),
         messengers=[rmse],
     ):
@@ -66,6 +67,7 @@ def test_metagene_expansion(
         with Session(
             covariates=extract_covariates(toydata.dataset.data.design),
             dataloader=toydata,
+            genes=toydata.dataset.genes,
             metagene_expansion_strategy=expansion_strategy,
             model=pretrained_toy_model,
         ):

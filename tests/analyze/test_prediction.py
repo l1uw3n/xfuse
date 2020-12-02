@@ -2,13 +2,13 @@ import os
 
 import numpy as np
 import pandas as pd
-from xfuse.analyze.imputation import compute_imputation
+from xfuse.analyze.prediction import _run_prediction_analysis
 from xfuse.session import Session
 from xfuse.session.items.work_dir import WorkDir
 from xfuse.utility.design import extract_covariates
 
 
-def test_compute_imputation(pretrained_toy_model, toydata, tmp_path):
+def test_run_prediction_analysis(pretrained_toy_model, toydata, tmp_path):
     with Session(
         model=pretrained_toy_model,
         genes=toydata.dataset.genes,
@@ -17,16 +17,15 @@ def test_compute_imputation(pretrained_toy_model, toydata, tmp_path):
         work_dir=WorkDir(tmp_path),
         eval=True,
     ):
-        compute_imputation("annotation1")
+        _run_prediction_analysis("annotation1")
 
     for name, slide in toydata.dataset.data.slides.items():
         name = os.path.basename(name)
-        output_file = tmp_path / name / "imputed_counts.csv.gz"
+        output_file = tmp_path / "data.csv.gz"
         assert os.path.exists(output_file)
 
         output_data = pd.read_csv(output_file)
-        output_data_labels = np.unique(output_data.label)
-        output_data_labels = np.sort(output_data_labels)
-        annotation_labels = np.unique(slide.data.annotation("annotation1"))
-        annotation_labels = np.sort(annotation_labels[annotation_labels > 0])
-        assert (annotation_labels == output_data_labels).all()
+        output_data_labels = list(np.unique(output_data.annotation1))
+        _, annotation_labels = slide.data.annotation("annotation1")
+        annotation_labels = sorted(annotation_labels.keys())
+        assert output_data_labels == annotation_labels

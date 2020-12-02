@@ -23,7 +23,7 @@ from ._config import (  # type: ignore
     merge_config,
 )
 from .logging import DEBUG, INFO, log
-from .messengers import Checkpointer, stats as stats_trackers
+from .messengers import AnalysisRunner, Checkpointer, stats as stats_trackers
 from .messengers.stats.writer import FileWriter, TensorboardWriter
 from .model.experiment.st.metagene_expansion_strategy import (
     STRATEGIES as expansion_strategies,
@@ -283,18 +283,18 @@ cli.add_command(init)
 @click.option("--session", type=click.File("rb"))
 @click.option("--tensorboard/--no-tensorboard", default=True)
 @click.option("--stats/--no-stats", default=False)
-@click.option("--stats-elbo-interval", default=1)
+@click.option("--stats-elbo-interval", default=10)
 @click.option("--stats-image-interval", default=1000)
 @click.option("--stats-latent-interval", default=1000)
-@click.option("--stats-loglikelihood-interval", default=1)
-@click.option("--stats-metagenefullsummary-interval", default=5000)
-@click.option("--stats-metagenehistogram-interval", default=100)
+@click.option("--stats-metagenefullsummary-interval", default=0)
+@click.option("--stats-metagenehistogram-interval", default=0)
 @click.option("--stats-metagenemean-interval", default=100)
 @click.option("--stats-metagenesummary-interval", default=1000)
-@click.option("--stats-rmse-interval", default=1)
+@click.option("--stats-rmse-interval", default=10)
 @click.option("--stats-scale-interval", default=1000)
 @click.option("--checkpoint-interval", default=1000)
 @click.option("--purge-interval", default=1000)
+@click.option("--analysis-interval", default=0)
 @_init
 def run(
     project_file,
@@ -304,7 +304,6 @@ def run(
     stats_elbo_interval,
     stats_image_interval,
     stats_latent_interval,
-    stats_loglikelihood_interval,
     stats_metagenefullsummary_interval,
     stats_metagenehistogram_interval,
     stats_metagenemean_interval,
@@ -313,6 +312,7 @@ def run(
     stats_scale_interval,
     checkpoint_interval,
     purge_interval,
+    analysis_interval,
 ):
     r"""
     Runs xfuse based on a project configuration file.
@@ -383,6 +383,11 @@ def run(
         if tensorboard:
             stats_writers.append(TensorboardWriter())
 
+        analyses = {
+            name: (settings["type"], settings["options"])
+            for name, settings in config["analyses"].items()
+        }
+
         def _every(n):
             def _predicate(**_msg):
                 return not get("eval") and get("training_data").step % n == 0
@@ -399,12 +404,6 @@ def run(
         if stats_latent_interval > 0:
             messengers.append(
                 stats_trackers.Latent(_every(stats_latent_interval))
-            )
-        if stats_loglikelihood_interval > 0:
-            messengers.append(
-                stats_trackers.LogLikelihood(
-                    _every(stats_loglikelihood_interval)
-                )
             )
         if stats_metagenefullsummary_interval > 0:
             messengers.append(
@@ -438,6 +437,10 @@ def run(
             )
         if checkpoint_interval > 0:
             messengers.append(Checkpointer(period=checkpoint_interval))
+        if analysis_interval > 0:
+            messengers.append(
+                AnalysisRunner(analyses=analyses, period=analysis_interval)
+            )
 
         with Session(
             covariates=covariates,
@@ -447,7 +450,7 @@ def run(
             _run(
                 design,
                 slide_paths,
-                analyses=config["analyses"],
+                analyses=analyses,
                 expansion_strategy=expansion_strategy,
                 purge_interval=purge_interval,
                 network_depth=config["xfuse"]["network_depth"],

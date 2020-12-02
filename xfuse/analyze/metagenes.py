@@ -5,7 +5,6 @@ from typing import cast
 import matplotlib.pyplot as plt
 import pandas as pd
 import pyro
-import torch
 from imageio import imwrite
 
 from ..model.experiment.st.st import ST, _encode_metagene_name
@@ -101,13 +100,11 @@ def visualize_metagene_profile(
 
 
 def compute_metagene_summary(method: str = "pca") -> None:
-    r"""Imputation analysis function"""
+    r"""Computes metagene summary"""
     # pylint: disable=too-many-locals
     dataloader = require("dataloader")
 
-    with Session(
-        default_device=torch.device("cpu"), messengers=[]
-    ), torch.no_grad():
+    with Session(messengers=[]):
         for slide_name, (summarization, metagenes) in zip(
             dataloader.dataset.data.design.columns,
             visualize_metagenes(method),

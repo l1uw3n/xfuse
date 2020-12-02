@@ -14,6 +14,7 @@ def test_split_metagene(pretrained_toy_model, toydata):
     with Session(
         model=pretrained_toy_model,
         dataloader=toydata,
+        genes=toydata.dataset.genes,
         covariates=extract_covariates(toydata.dataset.data.design),
     ):
         x = to_device(next(iter(toydata)))

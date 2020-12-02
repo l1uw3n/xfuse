@@ -9,7 +9,7 @@ from scipy.ndimage.morphology import distance_transform_edt
 from sklearn.decomposition import PCA
 
 from ..data import Data, Dataset
-from ..data.slide import FullSlide, Slide
+from ..data.slide import FullSlideIterator, Slide
 from ..data.utility.misc import make_dataloader
 from ..session import Session, get, require
 from ..utility.core import center_crop
@@ -121,12 +121,13 @@ def visualize_metagenes(
         raise ValueError(f'Method "{method}" not supported')
 
     def _compute_st_activation(x):
-        with pyro.poutine.trace() as guide_trace:
-            model.guide(x)
+        with Session(default_device=torch.device("cpu")):
+            with pyro.poutine.trace() as guide_trace:
+                model.guide(x)
 
-        with pyro.poutine.replay(trace=guide_trace.trace):
-            with pyro.poutine.trace() as model_trace:
-                model.model(x)
+            with pyro.poutine.replay(trace=guide_trace.trace):
+                with pyro.poutine.trace() as model_trace:
+                    model.model(x)
 
         activation = (
             model_trace.trace.nodes["rim"]["fn"]
@@ -177,7 +178,7 @@ def visualize_metagenes(
         Dataset(
             Data(
                 slides={
-                    k: Slide(data=v.data, iterator=FullSlide)
+                    k: Slide(data=v.data, iterator=FullSlideIterator)
                     for k, v in dataloader.dataset.data.slides.items()
                 },
                 design=dataloader.dataset.data.design,

@@ -61,9 +61,16 @@ class Dataset(torch.utils.data.Dataset):
                 ),
             )
         )
-        self.size = dict(
+        self._size = dict(
             zip(*np.unique(self.observations["type"], return_counts=True))
         )
+
+    def size(self, data_type: str) -> int:
+        """Returns the size of the dataset for a given `data_type`"""
+        try:
+            return self._size[data_type]
+        except KeyError:
+            return 0
 
     @property
     def genes(self):

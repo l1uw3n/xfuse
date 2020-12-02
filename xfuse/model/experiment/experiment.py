@@ -16,7 +16,7 @@ class Experiment(t.nn.Module):
         """
         dataloader = get("dataloader")
         if dataloader is not None:
-            return dataloader.dataset.size[self.tag]
+            return dataloader.dataset.size(self.tag)
         return 0
 
     @property

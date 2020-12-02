@@ -1,4 +1,3 @@
-import warnings
 from traceback import format_exc
 from typing import Any, Dict, List
 
@@ -109,7 +108,7 @@ def require(name: str) -> Any:
             if not isinstance(val, Unset):
                 return val
         except AttributeError:
-            warnings.warn(f'Session object lacks attribute "{name}"')
+            pass
 
     raise RuntimeError(f"Session item {name} has not been set!")
 

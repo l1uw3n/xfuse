@@ -10,7 +10,7 @@ from ...session import get
 from ...utility import center_crop
 from ..dataset import Dataset
 
-__all__ = ["make_dataloader", "spot_size"]
+__all__ = ["make_dataloader", "estimate_spot_size"]
 
 
 class _RepeatSampler:
@@ -57,7 +57,7 @@ class DataLoader(torch.utils.data.DataLoader):
             yield next(self.__iterator)
 
 
-def spot_size(dataset: Dataset) -> Dict[str, float]:
+def estimate_spot_size(dataset: Dataset) -> Dict[str, float]:
     r"""Computes the mean spot size in the :class:`Dataset`"""
 
     def _compute_size(x):
@@ -108,14 +108,43 @@ def make_dataloader(dataset: Dataset, **kwargs: Any) -> DataLoader:
             return x["type"]
 
         def _collate(ys):
+            collated_data = {}
+
             # we can't collate the count data as a tensor since its dimension
             # will differ between samples. therefore, we return it as a list
             # instead.
-            data = [y.pop("data") for y in ys]
+            try:
+                collated_data.update({"data": [y.pop("data") for y in ys]})
+            except KeyError:
+                pass
 
             # collate effects as dataframe to keep its metadata
-            effects = pd.concat([y.pop("effects") for y in ys], axis=1)
-            effects = effects.transpose()
+            try:
+                collated_data.update(
+                    {
+                        "effects": pd.concat(
+                            [y.pop("effects") for y in ys], axis=1
+                        ).transpose()
+                    }
+                )
+            except KeyError:
+                pass
+
+            # Collate any other non-tensor as list
+            collated_data.update(
+                {
+                    k: [v[1] for v in values]
+                    for k, values in it.groupby(
+                        [
+                            (name, y.pop(name))
+                            for y in ys
+                            for name, value in list(y.items())
+                            if not torch.is_tensor(value)
+                        ],
+                        key=lambda x: x[0],
+                    )
+                }
+            )
 
             # Crop image sizes to the minimum size over the batch
             min_size = {}
@@ -133,8 +162,9 @@ def make_dataloader(dataset: Dataset, **kwargs: Any) -> DataLoader:
                 for k, v in min_size.items():
                     if k in y and isinstance(y[k], torch.Tensor):
                         y[k] = center_crop(y[k], v.numpy().tolist())
+            collated_data.update(default_collate(ys))
 
-            return {"data": data, "effects": effects, **default_collate(ys)}
+            return collated_data
 
         return {
             k: _collate([_remove_key(v) for v in vs])
