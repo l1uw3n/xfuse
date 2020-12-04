@@ -42,16 +42,13 @@ class DataLoader(torch.utils.data.DataLoader):
         Reloads worker processes on the next call to `self.__iter__`. This
         should be called if the dataset in the main process has been changed.
         """
-        self.__iterator = None
+        self.__iterator = super().__iter__()
         return self
 
     def __len__(self):
         return len(self.batch_sampler.sampler)
 
     def __iter__(self):
-        if self.__iterator is None:
-            # pylint: disable=attribute-defined-outside-init
-            self.__iterator = super().__iter__()
         for _ in range(len(self)):
             # pylint: disable=stop-iteration-return
             yield next(self.__iterator)
