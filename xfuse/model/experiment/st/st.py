@@ -202,6 +202,7 @@ class ST(Image):
                     except KeyError:
                         pass
                     try:
+                        # pylint: disable=protected-access
                         del optim._state_waiting_to_be_consumed[x]
                     except KeyError:
                         pass
