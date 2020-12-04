@@ -20,7 +20,7 @@ class ELBO(StatsHandler):
         guide_log_prob = value.log_prob_sum(
             site_filter=lambda _, x: not x["is_guide"]
         )
-        elbo = model_log_prob - guide_log_prob
+        elbo = guide_log_prob - model_log_prob
         try:
             training_data.elbo_short = training_data.elbo_short + 1e-3 * (
                 elbo - training_data.elbo_short
