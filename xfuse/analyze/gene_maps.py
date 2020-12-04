@@ -107,7 +107,7 @@ def generate_gene_maps(
 
 
 def _run_gene_maps_analysis(
-    gene_name_regex: str = r".*",
+    gene_regex: str = r".*",
     num_samples: int = 10,
     genes_per_batch: int = 10,
     predict_mean: bool = True,
@@ -147,9 +147,7 @@ def _run_gene_maps_analysis(
 
     with Session(
         genes=[
-            x
-            for x in genes
-            if re.match(gene_name_regex, x, flags=re.IGNORECASE)
+            x for x in genes if re.match(gene_regex, x, flags=re.IGNORECASE)
         ]
     ):
         for slide_name, gene, samples in generate_gene_maps(
