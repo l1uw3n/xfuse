@@ -197,7 +197,14 @@ class ST(Image):
                 param = store[x].unconstrained()
                 del store[x]
                 if optim is not None:
-                    del optim.optim_objs[param]
+                    try:
+                        del optim.optim_objs[param]
+                    except KeyError:
+                        pass
+                    try:
+                        del optim._state_waiting_to_be_consumed[x]
+                    except KeyError:
+                        pass
 
     def __init_globals(self):
         dataloader = require("dataloader")
