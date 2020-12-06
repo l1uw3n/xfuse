@@ -364,7 +364,7 @@ def run(
         covariates = get("covariates")
         if covariates is None:
             covariates = {
-                covariate: np.unique([x[1] for x in group])
+                covariate: list(set(str(x[1]) for x in group))
                 for covariate, group in it.groupby(
                     sorted(
                         (covariate, conditions)
