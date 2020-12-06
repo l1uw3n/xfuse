@@ -364,13 +364,13 @@ def run(
         covariates = get("covariates")
         if covariates is None:
             covariates = {
-                covariate: [x[1] for x in group]
+                covariate: np.unique([x[1] for x in group])
                 for covariate, group in it.groupby(
-                    [
+                    sorted(
                         (covariate, conditions)
                         for slide, covariates in slide_covariates.items()
                         for covariate, conditions in covariates.items()
-                    ],
+                    ),
                     key=lambda x: x[0],
                 )
             }
