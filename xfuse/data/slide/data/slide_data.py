@@ -7,7 +7,7 @@ class SlideData(metaclass=ABCMeta):
     r"""Abstract class for different kinds of slide data"""
 
     @abstractproperty
-    def type(self) -> str:
+    def data_type(self) -> str:
         r"""The type tag of this slide"""
 
     @abstractproperty

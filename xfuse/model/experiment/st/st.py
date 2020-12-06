@@ -5,7 +5,8 @@ from functools import partial
 from typing import Dict, List, NamedTuple, Optional
 
 import numpy as np
-import pyro as p
+import pandas as pd
+import pyro
 import torch
 import torch.distributions.constraints as constraints
 from pyro.contrib.autoname import scope
@@ -190,7 +191,7 @@ class ST(Image):
         self.__metagene_queue.append(n)
 
         if remove_params:
-            store = p.get_param_store()
+            store = pyro.get_param_store()
             optim = get("optimizer")
             pname = _encode_metagene_name(n)
             for x in [p for p in store.keys() if pname in p]:
@@ -222,7 +223,7 @@ class ST(Image):
                             iterator=lambda x: DataIterator(x),
                         )
                         for k, v in dataloader.dataset.data.slides.items()
-                        if v.data.type == "ST"
+                        if v.data.data_type == "ST"
                     },
                     design=dataloader.dataset.data.design,
                 )
@@ -331,6 +332,8 @@ class ST(Image):
     def model(self, x, zs):
         # pylint: disable=too-many-locals, too-many-statements
 
+        dataset = require("dataloader").dataset
+
         def _compute_rim(decoded):
             shared_representation = get_module(
                 "metagene_shared",
@@ -362,9 +365,9 @@ class ST(Image):
 
         rim = checkpoint(_compute_rim, decoded)
         rim = center_crop(rim, [None, None, *label.shape[-2:]])
-        rim = p.sample("rim", Delta(rim))
+        rim = pyro.sample("rim", Delta(rim))
 
-        scale = p.sample(
+        scale = pyro.sample(
             "scale",
             Delta(
                 center_crop(
@@ -375,85 +378,103 @@ class ST(Image):
         )
         rim = scale * rim
 
-        with p.poutine.scale(
-            scale=len(x["data"]) / max(self.n, len(x["data"]))
-        ):
-            rate_mg_prior = Normal(
-                0.0,
-                1e-8
-                + get_param(
-                    "rate_mg_prior_sd",
-                    lambda: torch.ones(len(self._allocated_genes)),
-                    constraint=constraints.positive,
-                ),
-            )
+        rate_mg_prior = Normal(
+            0.0,
+            1e-8
+            + get_param(
+                "rate_mg_prior_sd",
+                lambda: torch.ones(len(self._allocated_genes)),
+                constraint=constraints.positive,
+            ),
+        )
+        with pyro.poutine.scale(scale=len(x["data"]) / dataset.size()):
             rate_mg = torch.stack(
                 [
-                    p.sample(_encode_metagene_name(n), rate_mg_prior)
+                    pyro.sample(
+                        _encode_metagene_name(n),
+                        rate_mg_prior,
+                        infer={"is_global": True},
+                    )
                     for n in self.metagenes
                 ]
             )
-            rate_mg = p.sample("rate_mg", Delta(rate_mg))
-            rate_mg = rate_mg[:, self._gene_indices]
+        rate_mg = pyro.sample("rate_mg", Delta(rate_mg))
 
-            rate_g_effects_baseline = get_param(
-                "rate_g_effects_baseline",
+        rate_g_conditions_prior = Normal(
+            0.0,
+            1e-8
+            + get_param(
+                "rate_g_conditions_prior_sd",
+                lambda: torch.ones(len(self._allocated_genes)),
+                constraint=constraints.positive,
+            ),
+        )
+        logits_g_conditions_prior = Normal(
+            0.0,
+            1e-8
+            + get_param(
+                "logits_g_conditions_prior_sd",
+                lambda: torch.ones(len(self._allocated_genes)),
+                constraint=constraints.positive,
+            ),
+        )
+
+        rate_g, logits_g = [], []
+
+        for batch_idx, (slide, covariates) in enumerate(
+            zip(x["slide"], x["covariates"])
+        ):
+            rate_g_slide = get_param(
+                "rate_g_condition_baseline",
                 lambda: self.__init_rate_baseline().log(),
                 lr_multiplier=5.0,
             )
-            logits_g_effects_baseline = get_param(
-                "logits_g_effects_baseline",
-                # pylint: disable=unnecessary-lambda
+            logits_g_slide = get_param(
+                "logits_g_condition_baseline",
                 self.__init_logits_baseline,
                 lr_multiplier=5.0,
             )
-            rate_g_effects_prior = Normal(
-                0.0,
-                1e-8
-                + get_param(
-                    "rate_g_effects_prior_sd",
-                    lambda: torch.ones(len(self._allocated_genes)),
-                    constraint=constraints.positive,
-                ),
-            )
-            rate_g_effects = p.sample("rate_g_effects", rate_g_effects_prior)
-            rate_g_effects = torch.cat(
-                [rate_g_effects_baseline.unsqueeze(0), rate_g_effects]
-            )
-            rate_g_effects = rate_g_effects[:, self._gene_indices]
-            logits_g_effects_prior = Normal(
-                0.0,
-                1e-8
-                + get_param(
-                    "logits_g_effects_prior_sd",
-                    lambda: torch.ones(len(self._allocated_genes)),
-                    constraint=constraints.positive,
-                ),
-            )
-            logits_g_effects = p.sample(
-                "logits_g_effects", logits_g_effects_prior,
-            )
-            logits_g_effects = torch.cat(
-                [logits_g_effects_baseline.unsqueeze(0), logits_g_effects]
-            )
-            logits_g_effects = logits_g_effects[:, self._gene_indices]
 
-        effects = []
-        for covariate, vals in require("covariates"):
-            effect = p.sample(
-                f"effect-{covariate}",
-                OneHotCategorical(
-                    to_device(torch.ones(len(vals))) / len(vals)
-                ),
-            )
-            effects.append(effect)
-        effects = torch.cat(
-            [to_device(torch.ones(x["effects"].shape[0], 1)), *effects,], 1,
-        ).float()
+            for covariate, condition in covariates.items():
+                conditions = dataset.data.design[covariate].cat.categories
 
-        logits_g = effects @ logits_g_effects
-        rate_g = effects @ rate_g_effects
-        rate_mg = rate_g[:, None] + rate_mg
+                if pd.isna(condition):
+                    with pyro.poutine.scale(
+                        scale=1.0 / dataset.size(slide=slide)
+                    ):
+                        pyro.sample(
+                            f"condition-{slide}-{batch_idx}-{covariate}",
+                            OneHotCategorical(
+                                torch.ones(conditions.shape[0])
+                                / conditions.shape[0]
+                            ),
+                            infer={"is_global": True},
+                        )
+                    condition_scale = 1e-99
+                    # ^ HACK: Pyro requires scale > 0
+                else:
+                    condition_scale = 1.0 / dataset.size(
+                        covariate=covariate, condition=condition
+                    )
+
+                with pyro.poutine.scale(scale=condition_scale):
+                    rate_g_slide = rate_g_slide + pyro.sample(
+                        f"rate_g_condition-{covariate}-{batch_idx}",
+                        rate_g_conditions_prior,
+                        infer={"is_global": True},
+                    )
+                    logits_g_slide = logits_g_slide + pyro.sample(
+                        f"logits_g_condition-{covariate}-{batch_idx}",
+                        logits_g_conditions_prior,
+                        infer={"is_global": True},
+                    )
+
+            rate_g.append(rate_g_slide)
+            logits_g.append(logits_g_slide)
+
+        logits_g = torch.stack(logits_g)[:, self._gene_indices]
+        rate_g = torch.stack(rate_g)[:, self._gene_indices]
+        rate_mg = rate_g.unsqueeze(1) + rate_mg[:, self._gene_indices]
 
         with scope(prefix=self.tag):
             image_distr = self._sample_image(x, decoded)
@@ -481,7 +502,7 @@ class ST(Image):
                 label = label[mask]
                 idxs, label = torch.unique(label, return_inverse=True)
                 data = data[idxs - 1]
-                p.sample(f"idx-{i}", Delta(idxs.float()))
+                pyro.sample(f"idx-{i}", Delta(idxs.float()))
 
                 rim = rim[:, mask]
                 labelonehot = sparseonehot(label)
@@ -491,68 +512,16 @@ class ST(Image):
                 expression_distr = NegativeBinomial(
                     total_count=1e-8 + rsg, logits=logits_g
                 )
-                p.sample(f"xsg-{i}", expression_distr, obs=data)
+                pyro.sample(f"xsg-{i}", expression_distr, obs=data)
 
         return image_distr, expression_distr
 
-    def _sample_globals(self):
-        dataset = require("dataloader").dataset
-        device = get("default_device")
-
-        p.sample(
-            "rate_g_effects",
-            Normal(
-                get_param(
-                    "rate_g_effects_mu",
-                    lambda: torch.zeros(
-                        dataset.data.design.shape[0],
-                        len(self._allocated_genes),
-                        device=device,
-                    ),
-                ),
-                1e-8
-                + get_param(
-                    "rate_g_effects_sd",
-                    lambda: 1e-2
-                    * torch.ones(
-                        dataset.data.design.shape[0],
-                        len(self._allocated_genes),
-                        device=device,
-                    ),
-                    constraint=constraints.positive,
-                ),
-            ),
-            infer={"is_global": True},
-        )
-
-        p.sample(
-            "logits_g_effects",
-            Normal(
-                get_param(
-                    "logits_g_effects_mu",
-                    lambda: torch.zeros(
-                        dataset.data.design.shape[0],
-                        len(self._allocated_genes),
-                        device=device,
-                    ),
-                ),
-                1e-8
-                + get_param(
-                    "logits_g_effects_sd",
-                    lambda: 1e-2
-                    * torch.ones(
-                        dataset.data.design.shape[0],
-                        len(self._allocated_genes),
-                        device=device,
-                    ),
-                    constraint=constraints.positive,
-                ),
-            ),
-            infer={"is_global": True},
-        )
-
-        # Sample metagene profiles
-        def _sample_metagene(metagene, name):
+    def _sample_metagenes(self):
+        def _sample_metagene(name, metagene):
+            if metagene.profile is None:
+                metagene = MetageneDefault(
+                    metagene.scale, torch.zeros(len(self._allocated_genes))
+                )
             mu = get_param(
                 f"{_encode_metagene_name(name)}_mu",
                 # pylint: disable=unnecessary-lambda
@@ -561,50 +530,99 @@ class ST(Image):
             )
             sd = get_param(
                 f"{_encode_metagene_name(name)}_sd",
-                lambda: 1e-2
-                * torch.ones_like(metagene.profile, device=device).float(),
+                lambda: 1e-2 * torch.ones_like(mu),
                 constraint=constraints.positive,
                 lr_multiplier=2.0,
             )
             if len(self.__metagenes) < 2:
                 mu = mu.detach()
                 sd = sd.detach()
-            p.sample(
+            pyro.sample(
                 _encode_metagene_name(name),
                 Normal(mu, 1e-8 + sd),
                 infer={"is_global": True},
             )
 
         for name, metagene in self.metagenes.items():
-            if metagene.profile is None:
-                metagene = MetageneDefault(
-                    metagene.scale, torch.zeros(len(self._allocated_genes))
-                )
-            _sample_metagene(metagene, name)
+            _sample_metagene(name, metagene)
 
     def guide(self, x):
-        with p.poutine.scale(
-            scale=len(x["data"]) / max(self.n, len(x["data"]))
-        ):
-            self._sample_globals()
-        for covariate, _ in require("covariates"):
-            is_observed = x["effects"][covariate].values.any(1)
-            effect_distr = RelaxedOneHotCategoricalStraightThrough(
-                temperature=to_device(torch.as_tensor(0.1)),
-                logits=torch.stack(
-                    [
-                        get_param(
-                            f"effect-{covariate}-{sample}-logits",
-                            torch.zeros(len(vals)),
-                        )
-                        for sample, vals in x["effects"][covariate].iterrows()
-                    ]
+        dataset = require("dataloader").dataset
+
+        with pyro.poutine.scale(scale=len(x["data"]) / dataset.size()):
+            self._sample_metagenes()
+
+        def _sample_condition(batch_idx, slide, covariate, condition):
+            conditions = dataset.data.design[covariate].cat.categories
+
+            if pd.isna(condition):
+                condition_distr = RelaxedOneHotCategoricalStraightThrough(
+                    temperature=to_device(torch.as_tensor(0.1)),
+                    logits=get_param(
+                        f"logits-{slide}-{covariate}",
+                        lambda: torch.zeros(conditions.shape[0]),
+                    ),
+                )
+                with pyro.poutine.scale(scale=1.0 / dataset.size(slide=slide)):
+                    condition_onehot = pyro.sample(
+                        f"condition-{covariate}-{batch_idx}",
+                        condition_distr,
+                        infer={"is_global": True},
+                    )
+                condition_scale = 1e-99
+                # ^ HACK: Pyro requires scale > 0
+            else:
+                condition_onehot = to_device(torch.eye(len(conditions)))[
+                    conditions == condition
+                ][0]
+                condition_scale = 1.0 / dataset.size(
+                    covariate=covariate, condition=condition
+                )
+
+            mu_rate_g_condition = condition_onehot @ get_param(
+                f"mu_rate_g_condition-{covariate}",
+                lambda: torch.zeros(
+                    len(conditions), len(self._allocated_genes)
                 ),
             )
-            with p.poutine.mask(mask=~to_device(torch.as_tensor(is_observed))):
-                effect = p.sample(f"effect-{covariate}-all", effect_distr)
-            effect[is_observed] = torch.as_tensor(
-                x["effects"][covariate].values[is_observed]
-            ).to(effect)
-            p.sample(f"effect-{covariate}", Delta(effect))
+            sd_rate_g_condition = condition_onehot @ get_param(
+                f"sd_rate_g_condition-{covariate}",
+                lambda: 1e-2
+                * torch.zeros(len(conditions), len(self._allocated_genes)),
+                constraint=constraints.positive,
+            )
+            with pyro.poutine.scale(scale=condition_scale):
+                pyro.sample(
+                    f"rate_g_condition-{covariate}-{batch_idx}",
+                    Normal(mu_rate_g_condition, 1e-8 + sd_rate_g_condition),
+                    infer={"is_global": True},
+                )
+
+            mu_logits_g_condition = condition_onehot @ get_param(
+                f"mu_logits_g_condition-{covariate}",
+                lambda: torch.zeros(
+                    len(conditions), len(self._allocated_genes)
+                ),
+            )
+            sd_logits_g_condition = condition_onehot @ get_param(
+                f"sd_logits_g_condition-{covariate}",
+                lambda: 1e-2
+                * torch.zeros(len(conditions), len(self._allocated_genes)),
+                constraint=constraints.positive,
+            )
+            with pyro.poutine.scale(scale=condition_scale):
+                pyro.sample(
+                    f"logits_g_condition-{covariate}-{batch_idx}",
+                    Normal(
+                        mu_logits_g_condition, 1e-8 + sd_logits_g_condition
+                    ),
+                    infer={"is_global": True},
+                )
+
+        for batch_idx, (slide, covariates) in enumerate(
+            zip(x["slide"], x["covariates"])
+        ):
+            for covariate, condition in covariates.items():
+                _sample_condition(batch_idx, slide, covariate, condition)
+
         return super().guide(x)

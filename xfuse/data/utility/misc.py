@@ -2,7 +2,6 @@ import itertools as it
 from typing import Any, Dict
 
 import numpy as np
-import pandas as pd
 import torch
 from torch.utils.data.dataloader import default_collate  # type: ignore
 
@@ -58,7 +57,7 @@ def estimate_spot_size(dataset: Dataset) -> Dict[str, float]:
     r"""Computes the mean spot size in the :class:`Dataset`"""
 
     def _compute_size(x):
-        if x["type"] == "ST":
+        if x["data_type"] == "ST":
             zero_count_idxs = 1 + torch.where(x["data"].sum(1) == 0)[0]
             partial_idxs = np.unique(
                 torch.cat(
@@ -87,7 +86,7 @@ def estimate_spot_size(dataset: Dataset) -> Dict[str, float]:
     return {
         k: np.concatenate([v[1] for v in vs]).mean()
         for k, vs in it.groupby(
-            [(x["type"], _compute_size(x)) for x in dataset],
+            [(x["data_type"], _compute_size(x)) for x in dataset],
             key=lambda x: x[0],
         )
     }
@@ -98,11 +97,11 @@ def make_dataloader(dataset: Dataset, **kwargs: Any) -> DataLoader:
 
     def _collate(xs):
         def _remove_key(v):
-            v.pop("type")
+            v.pop("data_type")
             return v
 
         def _sort_key(x):
-            return x["type"]
+            return x["data_type"]
 
         def _collate(ys):
             collated_data = {}
@@ -112,18 +111,6 @@ def make_dataloader(dataset: Dataset, **kwargs: Any) -> DataLoader:
             # instead.
             try:
                 collated_data.update({"data": [y.pop("data") for y in ys]})
-            except KeyError:
-                pass
-
-            # collate effects as dataframe to keep its metadata
-            try:
-                collated_data.update(
-                    {
-                        "effects": pd.concat(
-                            [y.pop("effects") for y in ys], axis=1
-                        ).transpose()
-                    }
-                )
             except KeyError:
                 pass
 

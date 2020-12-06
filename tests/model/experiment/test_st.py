@@ -2,7 +2,6 @@ import pyro
 from xfuse.model.experiment.st.st import _encode_metagene_name
 from xfuse.session import Session, get
 from xfuse.utility.tensor import to_device
-from xfuse.utility.design import extract_covariates
 
 
 def test_split_metagene(pretrained_toy_model, toydata):
@@ -15,7 +14,7 @@ def test_split_metagene(pretrained_toy_model, toydata):
         model=pretrained_toy_model,
         dataloader=toydata,
         genes=toydata.dataset.genes,
-        covariates=extract_covariates(toydata.dataset.data.design),
+        covariates=toydata.dataset.data.design.columns,
     ):
         x = to_device(next(iter(toydata)))
         with pyro.poutine.trace() as guide_tr:

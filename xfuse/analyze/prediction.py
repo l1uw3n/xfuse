@@ -17,7 +17,9 @@ from ..utility.tensor import to_device
 from .analyze import Analysis, _register_analysis
 
 
-def _run_model(model, data, normalize_effects, normalize_size, predict_mean):
+def _run_model(
+    model, data, normalize_covariates, normalize_size, predict_mean
+):
     genes = require("genes")
 
     data_type, *__this_should_be_empty = list(data.keys())
@@ -35,6 +37,15 @@ def _run_model(model, data, normalize_effects, normalize_size, predict_mean):
     # FIXME: Compatibility hack.
     #        Let's get back to this when reworking the model code.
     st_data = {
+        "slide": data["slide"],
+        "covariates": [
+            {
+                covariate: condition
+                for covariate, condition in covariates.items()
+                if covariate not in normalize_covariates
+            }
+            for covariates in data["covariates"]
+        ],
         "data": [
             to_device(
                 torch.zeros(
@@ -45,15 +56,11 @@ def _run_model(model, data, normalize_effects, normalize_size, predict_mean):
         ],
         "label": data["label"],
         "image": data["image"],
-        "effects": data["effects"],
     }
 
     with Session(eval=True):
         with pyro.poutine.trace() as guide_trace:
             model.guide({"ST": st_data})
-
-    for effect in normalize_effects:
-        guide_trace.trace.nodes[f"effect-{effect}"]["value"].zero_()
 
     with Session(eval=True):
         with pyro.poutine.replay(trace=guide_trace.trace):
@@ -61,12 +68,7 @@ def _run_model(model, data, normalize_effects, normalize_size, predict_mean):
                 model({"ST": st_data})
 
     for i, (annotation_name, label, label_names, section_name) in enumerate(
-        zip(
-            data["name"],
-            data["label"],
-            data["label_names"],
-            data["effects"].index,
-        )
+        zip(data["name"], data["label"], data["label_names"], data["slide"],)
     ):
         try:
             idxs = (
@@ -106,12 +108,12 @@ def predict(
     predict_mean: bool = True,
     normalize_scale: bool = False,
     normalize_size: bool = False,
-    normalize_effects: Optional[List[str]] = None,
+    normalize_covariates: Optional[List[str]] = None,
 ) -> Iterable[Dict[str, Any]]:
     """Predicts gene expression"""
 
-    if normalize_effects is None:
-        normalize_effects = []
+    if normalize_covariates is None:
+        normalize_covariates = []
 
     dataloader = require("dataloader")
     genes = require("genes")
@@ -147,7 +149,7 @@ def predict(
                         data=data,
                         predict_mean=predict_mean,
                         normalize_size=normalize_size,
-                        normalize_effects=normalize_effects,
+                        normalize_covariates=normalize_covariates,
                     )
 
         conditional_model.guide = pyro.poutine.condition(
@@ -172,7 +174,7 @@ def predict(
                     data=data,
                     predict_mean=predict_mean,
                     normalize_size=normalize_size,
-                    normalize_effects=normalize_effects,
+                    normalize_covariates=normalize_covariates,
                 )
 
     with Progressbar(
@@ -216,12 +218,12 @@ def _run_prediction_analysis(
     predict_mean: bool = True,
     normalize_scale: bool = False,
     normalize_size: bool = False,
-    normalize_effects: Optional[List[str]] = None,
+    normalize_covariates: Optional[List[str]] = None,
 ) -> None:
     """Runs prediction analysis"""
 
-    if normalize_effects is None:
-        normalize_effects = []
+    if normalize_covariates is None:
+        normalize_covariates = []
 
     dataloader = require("dataloader")
     dataloader = make_dataloader(
@@ -250,7 +252,7 @@ def _run_prediction_analysis(
             predict_mean=predict_mean,
             normalize_scale=normalize_scale,
             normalize_size=normalize_size,
-            normalize_effects=normalize_effects,
+            normalize_covariates=normalize_covariates,
         )
 
     samples = samples.pivot(

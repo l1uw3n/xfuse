@@ -43,7 +43,7 @@ class AnnotatedImage(SlideData):
         )
 
     @property
-    def type(self) -> str:
+    def data_type(self) -> str:
         return "AnnotatedImage"
 
     @property

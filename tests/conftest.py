@@ -17,7 +17,6 @@ from xfuse.model import XFuse
 from xfuse.model.experiment.st import ST, MetageneDefault
 from xfuse.session import Session, get
 from xfuse.train import train
-from xfuse.utility.design import design_matrix_from, extract_covariates
 from xfuse.utility.state import reset_state
 
 
@@ -140,9 +139,9 @@ def toydata(tmp_path):
         path=str(filepath),
     )
 
-    design_matrix = design_matrix_from({"toydata": {"ID": 1}})
+    design = pd.DataFrame({"ID": 1}, index=["toydata"]).astype("category")
     slide = Slide(data=STSlide(str(filepath)), iterator=FullSlideIterator)
-    data = Data(slides={"toydata": slide}, design=design_matrix)
+    data = Data(slides={"toydata": slide}, design=design)
     dataset = Dataset(data)
     dataloader = make_dataloader(dataset)
 
@@ -164,7 +163,7 @@ def pretrained_toy_model(toydata):
         optimizer=pyro.optim.Adam({"lr": 0.001}),
         dataloader=toydata,
         genes=toydata.dataset.genes,
-        covariates=extract_covariates(toydata.dataset.data.design),
+        covariates=toydata.dataset.data.design.columns,
     ):
         train(100 + get("training_data").epoch)
     return xfuse

@@ -1,5 +1,6 @@
 # pylint: disable=missing-docstring, invalid-name, too-many-instance-attributes
 
+import itertools as it
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import tomlkit
 
 from imageio import imread
 from PIL import Image
+from tabulate import tabulate
 
 from . import __version__, convert
 from ._config import (  # type: ignore
@@ -30,7 +32,6 @@ from .model.experiment.st.metagene_expansion_strategy import (
 )
 from .run import run as _run
 from .utility.core import temp_attr
-from .utility.design import design_matrix_from, extract_covariates
 from .utility.file import first_unique_filename
 from .session import Session, get
 from .session.io import load_session
@@ -359,13 +360,41 @@ def run(
             name: slide["covariates"] if "covariates" in slide else {}
             for name, slide in config["slides"].items()
         }
-        design = design_matrix_from(
-            slide_covariates, covariates=get("covariates")
+
+        covariates = get("covariates")
+        if covariates is None:
+            covariates = {
+                covariate: [x[1] for x in group]
+                for covariate, group in it.groupby(
+                    [
+                        (covariate, conditions)
+                        for slide, covariates in slide_covariates.items()
+                        for covariate, conditions in covariates.items()
+                    ],
+                    key=lambda x: x[0],
+                )
+            }
+
+        design = pd.DataFrame(
+            index=slide_covariates.keys(), columns=covariates.keys()
         )
-        covariates = extract_covariates(design)
-        log(INFO, "Using the following design covariates:")
-        for name, values in covariates:
-            log(INFO, "  - %s: %s", name, ", ".join(map(str, values)))
+        for slide_name, slide_covariates in slide_covariates.items():
+            for slide_covariate, slide_condition in slide_covariates.items():
+                design.loc[slide_name, slide_covariate] = slide_condition
+        design = design.astype("category")
+        for covariate, conditions in covariates.items():
+            design[covariate].cat.set_categories(conditions)
+
+        log(INFO, "Using the following design table:")
+        for x in tabulate(
+            design.astype(object).fillna("<inferred>"),
+            headers=[
+                "{} {{{}}}".format(c, ",".join(covariates[c]))
+                for c in design.columns
+            ],
+            tablefmt="grid",
+        ).split("\n"):
+            log(INFO, x)
 
         expansion_strategy = get("metagene_expansion_strategy")
         if expansion_strategy is None:

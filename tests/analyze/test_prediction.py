@@ -5,7 +5,6 @@ import pandas as pd
 from xfuse.analyze.prediction import _run_prediction_analysis
 from xfuse.session import Session
 from xfuse.session.items.work_dir import WorkDir
-from xfuse.utility.design import extract_covariates
 
 
 def test_run_prediction_analysis(pretrained_toy_model, toydata, tmp_path):
@@ -13,7 +12,7 @@ def test_run_prediction_analysis(pretrained_toy_model, toydata, tmp_path):
         model=pretrained_toy_model,
         genes=toydata.dataset.genes,
         dataloader=toydata,
-        covariates=extract_covariates(toydata.dataset.data.design),
+        covariates=toydata.dataset.data.design.columns,
         work_dir=WorkDir(tmp_path),
         eval=True,
     ):

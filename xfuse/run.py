@@ -87,7 +87,7 @@ def run(
                 ),
             ),
         )
-        for slide in design.columns
+        for slide in design.index
     }
     dataset = Dataset(data=Data(slides=slides, design=design))
     dataloader = make_dataloader(

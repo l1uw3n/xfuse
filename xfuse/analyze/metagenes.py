@@ -30,7 +30,7 @@ def compute_metagene_profiles():
         with pyro.poutine.block():
             with pyro.poutine.trace() as trace:
                 # pylint: disable=protected-access
-                experiment._sample_globals()
+                experiment._sample_metagenes()
         return [
             (n, trace.trace.nodes[_encode_metagene_name(n)]["fn"])
             for n in experiment.metagenes
@@ -40,43 +40,39 @@ def compute_metagene_profiles():
 
     for experiment in model.experiments.keys():
         try:
-            names, profiles = zip(*_metagene_profile_fn[experiment]())
-            dataframe = (
-                pd.concat(
-                    [
-                        pd.DataFrame(
-                            [
-                                x.mean.detach().cpu().numpy(),
-                                x.stddev.detach().cpu().numpy(),
-                            ],
-                            columns=genes,
-                            index=pd.Index(
-                                ["mean", "stddev"], name="log2fold"
-                            ),
-                        )
-                        for x in profiles
-                    ],
-                    keys=pd.Index(names, name="metagene"),
-                )
-                .reset_index()
-                .melt(
-                    ["metagene", "log2fold"],
-                    var_name="gene",
-                    value_name="value",
-                )
-                .pivot_table(
-                    index=["metagene", "gene"],
-                    columns="log2fold",
-                    values="value",
-                )
-            )
-            yield experiment, dataframe
+            fn = _metagene_profile_fn[experiment]
         except KeyError:
             warnings.warn(
                 f'Metagene profiles for experiment of type "{experiment}"'
                 " not implemented"
             )
             continue
+
+        names, profiles = zip(*fn())
+        dataframe = (
+            pd.concat(
+                [
+                    pd.DataFrame(
+                        [
+                            x.mean.detach().cpu().numpy(),
+                            x.stddev.detach().cpu().numpy(),
+                        ],
+                        columns=genes,
+                        index=pd.Index(["mean", "stddev"], name="log2fold"),
+                    )
+                    for x in profiles
+                ],
+                keys=pd.Index(names, name="metagene"),
+            )
+            .reset_index()
+            .melt(
+                ["metagene", "log2fold"], var_name="gene", value_name="value",
+            )
+            .pivot_table(
+                index=["metagene", "gene"], columns="log2fold", values="value",
+            )
+        )
+        yield experiment, dataframe
 
 
 def visualize_metagene_profile(

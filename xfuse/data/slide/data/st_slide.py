@@ -35,7 +35,7 @@ class STSlide(SlideData):
         self.min_counts = min_counts
 
     @property
-    def type(self) -> str:
+    def data_type(self) -> str:
         return "ST"
 
     @property

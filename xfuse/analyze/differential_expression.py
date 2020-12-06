@@ -16,7 +16,7 @@ from .prediction import predict_df
 def _run_differential_expression_analysis(
     annotation_layer: Optional[str] = None,
     comparisons: List[Tuple[str, str]] = None,
-    normalize_effects: List[str] = None,
+    normalize_covariates: List[str] = None,
     num_samples: int = 50,
     genes_per_batch: int = 100000,
 ) -> None:
@@ -38,8 +38,8 @@ def _run_differential_expression_analysis(
         )
         return
 
-    if normalize_effects is None:
-        normalize_effects = []
+    if normalize_covariates is None:
+        normalize_covariates = []
 
     slides = {
         slide_name: Slide(
@@ -60,7 +60,7 @@ def _run_differential_expression_analysis(
         samples = predict_df(
             num_samples=num_samples,
             genes_per_batch=genes_per_batch,
-            normalize_effects=normalize_effects,
+            normalize_covariates=normalize_covariates,
         )
 
     samples = samples.groupby([annotation_layer, "sample", "gene"]).agg(sum)
